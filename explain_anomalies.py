@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
 
 # ============================================================
 # DIRECTORIES
@@ -128,47 +129,56 @@ def feature_deviation_analysis(df):
 # TEMPORAL EXPLANATION PLOT
 # ============================================================
 
-def temporal_explanation_plot(df):
+# ============================================================
+# ATTACK DISTRIBUTION
+# ============================================================
 
-    anomalies = df[
-        df["reconstruction_anomaly"] == 1
-    ]
+def plot_attack_distribution(df):
 
-    plt.figure(figsize=(14, 6))
-
-    plt.plot(
-        df["timestamp_utc"],
-        df["value"],
-        label="PM2.5"
+    attack_counts = (
+        df["attack_label"]
+        .value_counts()
+        .sort_values(ascending=False)
     )
 
-    plt.scatter(
-        anomalies["timestamp_utc"],
-        anomalies["value"]
+    plt.figure(figsize=(10, 6))
+
+    attack_counts.plot(
+        kind="bar",
+        color="steelblue",
+        edgecolor="black"
     )
 
     plt.title(
-        "Explained Environmental Anomalies"
+        "Attack Scenario Distribution",
+        fontsize=14,
+        fontweight="bold"
     )
 
-    plt.xlabel("Timestamp")
-    plt.ylabel("PM2.5")
+    plt.xlabel("Attack Type")
+    plt.ylabel("Number of Observations")
 
-    plt.legend()
+    plt.grid(
+        axis="y",
+        alpha=0.3
+    )
 
     plt.tight_layout()
 
     output_path = (
         PLOTS_DIR /
-        "explained_anomalies.png"
+        "attack_distribution.png"
     )
 
-    plt.savefig(output_path)
+    plt.savefig(
+        output_path,
+        dpi=300,
+        bbox_inches="tight"
+    )
 
     plt.close()
 
     print(f"[INFO] Saved: {output_path}")
-
 
 # ============================================================
 # ATTACK REGION ANALYSIS
@@ -215,52 +225,350 @@ def suspicious_region_analysis(df):
 # COMPARISON PLOT
 # ============================================================
 
-def normal_vs_attack_plot(df):
+# ============================================================
+# DETECTOR AGREEMENT MATRIX
+# ============================================================
 
-    normal = df[
-        df["attack_label"] == "normal"
-    ]
+def plot_detector_agreement(df):
 
-    attacked = df[
-        df["attack_label"] != "normal"
-    ]
+    agreement = pd.DataFrame({
 
-    plt.figure(figsize=(14, 6))
+        "Z-Score":
+            df["zscore_anomaly"],
 
-    plt.plot(
-        normal["timestamp_utc"],
-        normal["value"],
-        label="Normal"
+        "Isolation Forest":
+            df["iforest_anomaly"],
+
+        "Reconstruction":
+            df["reconstruction_anomaly"]
+
+    })
+
+    corr = agreement.corr()
+
+    fig, ax = plt.subplots(
+        figsize=(7, 6)
     )
 
-    plt.scatter(
-        attacked["timestamp_utc"],
-        attacked["value"],
-        label="Attacked"
+    im = ax.imshow(
+        corr,
+        cmap="Blues",
+        vmin=0,
+        vmax=1
+    )
+
+    ax.set_xticks(
+        range(len(corr.columns))
+    )
+
+    ax.set_yticks(
+        range(len(corr.columns))
+    )
+
+    ax.set_xticklabels(
+        corr.columns,
+        rotation=20
+    )
+
+    ax.set_yticklabels(
+        corr.columns
+    )
+
+    for i in range(len(corr)):
+        for j in range(len(corr)):
+            ax.text(
+                j,
+                i,
+                f"{corr.iloc[i,j]:.2f}",
+                ha="center",
+                va="center",
+                fontsize=10
+            )
+
+    plt.colorbar(
+        im,
+        ax=ax,
+        label="Correlation"
     )
 
     plt.title(
-        "Normal vs Manipulated PM2.5 Behavior"
+        "Detector Agreement Matrix",
+        fontsize=14,
+        fontweight="bold"
     )
-
-    plt.xlabel("Timestamp")
-    plt.ylabel("PM2.5")
-
-    plt.legend()
 
     plt.tight_layout()
 
     output_path = (
         PLOTS_DIR /
-        "normal_vs_attacked.png"
+        "detector_agreement.png"
     )
 
-    plt.savefig(output_path)
+    plt.savefig(
+        output_path,
+        dpi=300,
+        bbox_inches="tight"
+    )
 
     plt.close()
 
     print(f"[INFO] Saved: {output_path}")
 
+# ============================================================
+# ATTACK TYPE DETECTION EFFECTIVENESS
+# ============================================================
+
+def plot_attack_detection_rate(df):
+
+    detector_cols = [
+
+        "zscore_anomaly",
+
+        "iforest_anomaly",
+
+        "reconstruction_anomaly"
+
+    ]
+
+    attacked = df[
+        df["attack_label"] != "normal"
+    ].copy()
+
+    attacked["detected"] = (
+        attacked[detector_cols]
+        .max(axis=1)
+    )
+
+    detection_rate = (
+
+        attacked.groupby(
+            "attack_label"
+        )["detected"]
+
+        .mean()
+
+        * 100
+
+    )
+
+    plt.figure(figsize=(10, 6))
+
+    bars = plt.bar(
+
+        detection_rate.index,
+
+        detection_rate.values,
+
+        color="darkorange",
+
+        edgecolor="black"
+
+    )
+
+    plt.ylabel(
+        "Detection Rate (%)"
+    )
+
+    plt.xlabel(
+        "Attack Type"
+    )
+
+    plt.ylim(
+        0,
+        100
+    )
+
+    plt.title(
+        "Attack-Type Detection Effectiveness",
+        fontsize=14,
+        fontweight="bold"
+    )
+
+    plt.grid(
+        axis="y",
+        alpha=0.3
+    )
+
+    for bar in bars:
+
+        plt.text(
+
+            bar.get_x()
+            + bar.get_width()/2,
+
+            bar.get_height()+2,
+
+            f"{bar.get_height():.1f}%",
+
+            ha="center"
+
+        )
+
+    plt.tight_layout()
+
+    output_path = (
+        PLOTS_DIR /
+        "attack_detection_rate.png"
+    )
+
+    plt.savefig(
+        output_path,
+        dpi=300,
+        bbox_inches="tight"
+    )
+
+    plt.close()
+
+    print(f"[INFO] Saved: {output_path}")
+
+# ============================================================
+# COMBINED EXPLAINABILITY FIGURE
+# ============================================================
+
+def plot_combined_explainability(df):
+
+    fig, axes = plt.subplots(
+        1,
+        3,
+        figsize=(18, 5)
+    )
+
+    # ---------------------------------
+    # Attack Distribution
+    # ---------------------------------
+
+    attack_counts = (
+        df["attack_label"]
+        .value_counts()
+    )
+
+    attack_counts.plot(
+        kind="bar",
+        ax=axes[0],
+        color="steelblue"
+    )
+
+    axes[0].set_title(
+        "(a) Attack Distribution"
+    )
+
+    # ---------------------------------
+    # Detector Agreement
+    # ---------------------------------
+
+    agreement = pd.DataFrame({
+
+        "Z":
+            df["zscore_anomaly"],
+
+        "IF":
+            df["iforest_anomaly"],
+
+        "RE":
+            df["reconstruction_anomaly"]
+
+    })
+
+    corr = agreement.corr()
+
+    axes[1].imshow(
+        corr,
+        cmap="Blues",
+        vmin=0,
+        vmax=1
+    )
+
+    axes[1].set_xticks(
+        range(len(corr.columns))
+    )
+
+    axes[1].set_yticks(
+        range(len(corr.columns))
+    )
+
+    axes[1].set_xticklabels(
+        corr.columns
+    )
+
+    axes[1].set_yticklabels(
+        corr.columns
+    )
+
+    axes[1].set_title(
+        "(b) Detector Agreement"
+    )
+
+    # ---------------------------------
+    # Detection Effectiveness
+    # ---------------------------------
+
+    attacked = df[
+        df["attack_label"] != "normal"
+    ].copy()
+
+    attacked["detected"] = (
+
+        attacked[
+            [
+                "zscore_anomaly",
+                "iforest_anomaly",
+                "reconstruction_anomaly"
+            ]
+        ]
+
+        .max(axis=1)
+
+    )
+
+    rates = (
+
+        attacked.groupby(
+            "attack_label"
+        )["detected"]
+
+        .mean()
+
+        * 100
+
+    )
+
+    axes[2].bar(
+        rates.index,
+        rates.values,
+        color="darkorange"
+    )
+
+    axes[2].set_ylim(
+        0,
+        100
+    )
+
+    axes[2].set_title(
+        "(c) Detection Rate"
+    )
+
+    fig.suptitle(
+        "Environmental Cybersecurity Explainability Analysis",
+        fontsize=16,
+        fontweight="bold"
+    )
+
+    plt.tight_layout()
+
+    output_path = (
+        PLOTS_DIR /
+        "combined_explainability_analysis.png"
+    )
+
+    plt.savefig(
+        output_path,
+        dpi=300,
+        bbox_inches="tight"
+    )
+
+    plt.close()
+
+    print(f"[INFO] Saved: {output_path}")
 
 # ============================================================
 # MAIN
@@ -292,9 +600,13 @@ def main():
 
     print("\n[INFO] Generating explanation plots...")
 
-    temporal_explanation_plot(df)
+    plot_attack_distribution(df)
 
-    normal_vs_attack_plot(df)
+    plot_detector_agreement(df)
+
+    plot_attack_detection_rate(df)
+
+    plot_combined_explainability(df)
 
     print("\n[INFO] Explainability analysis completed.")
 

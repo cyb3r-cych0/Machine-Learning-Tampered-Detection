@@ -167,6 +167,77 @@ def reconstruction_error_detection(
 
 
 # ============================================================
+# MONTHLY ANOMALY AGGREGATION
+# ============================================================
+
+def build_monthly_anomaly_summary(df):
+
+    monthly = (
+        df.set_index("timestamp_utc")
+          .resample("ME")
+          .agg({
+              "zscore_anomaly": "sum",
+              "iforest_anomaly": "sum",
+              "reconstruction_anomaly": "sum"
+          })
+          .reset_index()
+    )
+
+    return monthly
+
+# ============================================================
+# MONTHLY ANOMALY COMPARISON FIGURE
+# ============================================================
+
+def plot_monthly_anomaly_counts(monthly):
+
+    fig, ax = plt.subplots(figsize=(14,6))
+
+    ax.plot(
+        monthly["timestamp_utc"],
+        monthly["zscore_anomaly"],
+        linewidth=2.5,
+        marker="o",
+        label="Rolling Z-Score"
+    )
+
+    ax.plot(
+        monthly["timestamp_utc"],
+        monthly["iforest_anomaly"],
+        linewidth=2.5,
+        marker="s",
+        label="Isolation Forest"
+    )
+
+    ax.plot(
+        monthly["timestamp_utc"],
+        monthly["reconstruction_anomaly"],
+        linewidth=2.5,
+        marker="^",
+        label="Reconstruction Error"
+    )
+
+    ax.set_title(
+        "Monthly Detected Anomalies"
+    )
+
+    ax.set_ylabel(
+        "Anomaly Count"
+    )
+
+    ax.legend()
+
+    plt.tight_layout()
+
+    plt.savefig(
+        PLOTS_DIR /
+        "monthly_anomaly_counts.png",
+        dpi=600
+    )
+
+    plt.close()
+
+# ============================================================
 # EVALUATION
 # ============================================================
 
@@ -194,59 +265,207 @@ def evaluate_method(
         zero_division=0
     )
 
-    print("\n==============================")
-    print(f"{method_name}")
-    print("==============================")
-
+    print(f"\n{method_name}")
     print(f"Precision : {precision:.4f}")
     print(f"Recall    : {recall:.4f}")
     print(f"F1 Score  : {f1:.4f}")
 
+    return {
+        "Method": method_name,
+        "Precision": precision,
+        "Recall": recall,
+        "F1": f1
+    }
+
+
+# ============================================================
+# PERFORMANCE COMPARISON FIGURE
+# ============================================================
+
+def plot_performance(metrics):
+
+    methods = [
+        m["Method"]
+        for m in metrics
+    ]
+
+    precision = [
+        m["Precision"]
+        for m in metrics
+    ]
+
+    recall = [
+        m["Recall"]
+        for m in metrics
+    ]
+
+    f1 = [
+        m["F1"]
+        for m in metrics
+    ]
+
+    x = np.arange(len(methods))
+    width = 0.25
+
+    fig, ax = plt.subplots(figsize=(10,6))
+
+    ax.bar(
+        x-width,
+        precision,
+        width,
+        label="Precision"
+    )
+
+    ax.bar(
+        x,
+        recall,
+        width,
+        label="Recall"
+    )
+
+    ax.bar(
+        x+width,
+        f1,
+        width,
+        label="F1"
+    )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(methods)
+
+    ax.set_ylim(0,1)
+
+    ax.set_title(
+        "Anomaly Detection Performance"
+    )
+
+    ax.legend()
+
+    plt.tight_layout()
+
+    plt.savefig(
+        PLOTS_DIR /
+        "detection_performance.png",
+        dpi=600
+    )
+
+    plt.close()
+
+
+# ============================================================
+# COMBINED FIGURE
+# ============================================================
+def plot_combined_detection(monthly, metrics):
+
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(16,6)
+    )
+
+    axes[0].plot(
+        monthly["timestamp_utc"],
+        monthly["zscore_anomaly"],
+        label="Z-Score"
+    )
+
+    axes[0].plot(
+        monthly["timestamp_utc"],
+        monthly["iforest_anomaly"],
+        label="Isolation Forest"
+    )
+
+    axes[0].plot(
+        monthly["timestamp_utc"],
+        monthly["reconstruction_anomaly"],
+        label="Reconstruction Error"
+    )
+
+    axes[0].set_title(
+        "(a) Monthly Detected Anomalies"
+    )
+
+    axes[0].legend()
+
+    methods = [
+        m["Method"]
+        for m in metrics
+    ]
+
+    f1 = [
+        m["F1"]
+        for m in metrics
+    ]
+
+    axes[1].bar(
+        methods,
+        f1
+    )
+
+    axes[1].set_ylim(0,1)
+
+    axes[1].set_title(
+        "(b) F1-Score Comparison"
+    )
+
+    fig.suptitle(
+        "Anomaly Detection Results"
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        PLOTS_DIR /
+        "anomaly_detection_publication_figure.png",
+        dpi=600
+    )
+
+    plt.close()
 
 # ============================================================
 # ANOMALY VISUALIZATION
 # ============================================================
 
-def plot_anomalies(
-        df,
-        column,
-        filename,
-        title
-):
-
-    anomalies = df[df[column] == 1]
-
-    plt.figure(figsize=(14, 6))
-
-    plt.plot(
-        df["timestamp_utc"],
-        df["value"],
-        label="PM2.5"
-    )
-
-    plt.scatter(
-        anomalies["timestamp_utc"],
-        anomalies["value"]
-    )
-
-    plt.title(title)
-
-    plt.xlabel("Timestamp")
-    plt.ylabel("PM2.5")
-
-    plt.legend()
-
-    plt.tight_layout()
-
-    output_path = (
-        PLOTS_DIR / filename
-    )
-
-    plt.savefig(output_path)
-
-    plt.close()
-
-    print(f"[INFO] Saved: {output_path}")
+# def plot_anomalies(
+#         df,
+#         column,
+#         filename,
+#         title
+# ):
+#
+#     anomalies = df[df[column] == 1]
+#
+#     plt.figure(figsize=(14, 6))
+#
+#     plt.plot(
+#         df["timestamp_utc"],
+#         df["value"],
+#         label="PM2.5"
+#     )
+#
+#     plt.scatter(
+#         anomalies["timestamp_utc"],
+#         anomalies["value"]
+#     )
+#
+#     plt.title(title)
+#
+#     plt.xlabel("Timestamp")
+#     plt.ylabel("PM2.5")
+#
+#     plt.legend()
+#
+#     plt.tight_layout()
+#
+#     output_path = (
+#         PLOTS_DIR / filename
+#     )
+#
+#     plt.savefig(output_path)
+#
+#     plt.close()
+#
+#     print(f"[INFO] Saved: {output_path}")
 
 
 # ============================================================
@@ -290,72 +509,102 @@ def main():
     print("[INFO] Running anomaly detection...")
 
     # ========================================================
-    # METHOD 1
+    # METHOD 1 — ROLLING Z-SCORE
     # ========================================================
 
     df = rolling_zscore_detection(df)
 
-    evaluate_method(
+    zscore_metrics = evaluate_method(
         df["is_attack"],
         df["zscore_anomaly"],
-        "Rolling Z-Score Detection"
+        "Rolling Z-Score"
     )
 
     # ========================================================
-    # METHOD 2
+    # METHOD 2 — ISOLATION FOREST
     # ========================================================
 
     df = isolation_forest_detection(df)
 
-    evaluate_method(
+    iforest_metrics = evaluate_method(
         df["is_attack"],
         df["iforest_anomaly"],
         "Isolation Forest"
     )
 
     # ========================================================
-    # METHOD 3
+    # METHOD 3 — RECONSTRUCTION ERROR
     # ========================================================
 
     df = reconstruction_error_detection(df)
 
-    evaluate_method(
+    recon_metrics = evaluate_method(
         df["is_attack"],
         df["reconstruction_anomaly"],
-        "Reconstruction Error Detection"
+        "Reconstruction Error"
     )
 
     # ========================================================
-    # VISUALIZATIONS
+    # COLLECT METRICS
     # ========================================================
 
-    print("\n[INFO] Generating anomaly plots...")
+    metrics = [
+        zscore_metrics,
+        iforest_metrics,
+        recon_metrics
+    ]
 
-    plot_anomalies(
-        df,
-        "zscore_anomaly",
-        "zscore_anomalies.png",
-        "Rolling Z-Score Anomalies"
+    # ========================================================
+    # MONTHLY SUMMARY
+    # ========================================================
+
+    monthly = build_monthly_anomaly_summary(df)
+
+    # ========================================================
+    # PUBLICATION FIGURES
+    # ========================================================
+
+    print("\n[INFO] Generating publication figures...")
+
+    plot_monthly_anomaly_counts(monthly)
+
+    plot_performance(metrics)
+
+    plot_combined_detection(
+        monthly,
+        metrics
     )
 
-    plot_anomalies(
-        df,
-        "iforest_anomaly",
-        "iforest_anomalies.png",
-        "Isolation Forest Anomalies"
-    )
-
-    plot_anomalies(
-        df,
-        "reconstruction_anomaly",
-        "reconstruction_anomalies.png",
-        "Reconstruction Error Anomalies"
-    )
+    # ========================================================
+    # OPTIONAL DEBUG FIGURES
+    # ========================================================
+    #
+    # Uncomment only if needed.
+    #
+    # plot_anomalies(
+    #     df,
+    #     "zscore_anomaly",
+    #     "zscore_anomalies.png",
+    #     "Rolling Z-Score Anomalies"
+    # )
+    #
+    # plot_anomalies(
+    #     df,
+    #     "iforest_anomaly",
+    #     "iforest_anomalies.png",
+    #     "Isolation Forest Anomalies"
+    # )
+    #
+    # plot_anomalies(
+    #     df,
+    #     "reconstruction_anomaly",
+    #     "reconstruction_anomalies.png",
+    #     "Reconstruction Error Anomalies"
+    # )
 
     save_results(df)
 
     print("\n[INFO] Anomaly detection completed.")
-
 
 # ============================================================
 # ENTRYPOINT

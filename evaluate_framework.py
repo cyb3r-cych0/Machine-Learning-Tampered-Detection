@@ -32,6 +32,7 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+from sklearn.metrics import roc_auc_score
 
 from sklearn.metrics import (
     precision_score,
@@ -146,13 +147,19 @@ def evaluate_method(
         y_pred
     )
 
+    roc_auc = roc_auc_score(
+        y_true,
+        y_pred
+    )
+
     return {
         "method": method_name,
         "precision": precision,
         "recall": recall,
         "f1_score": f1,
         "accuracy": accuracy,
-        "false_positive_rate": fpr
+        "false_positive_rate": fpr,
+        "roc_auc": roc_auc
     }
 
 
@@ -417,75 +424,167 @@ def performance_comparison_plot(results_df):
 
 
 # ============================================================
-# FALSE POSITIVE COMPARISON
-# ============================================================
-
-def false_positive_plot(results_df):
-
-    plt.figure(figsize=(10, 6))
-
-    plt.bar(
-        results_df["method"],
-        results_df["false_positive_rate"]
-    )
-
-    plt.ylabel("False Positive Rate")
-
-    plt.title(
-        "False Positive Rate Comparison"
-    )
-
-    plt.tight_layout()
-
-    output_path = (
-        PLOTS_DIR /
-        "false_positive_comparison.png"
-    )
-
-    plt.savefig(output_path)
-
-    plt.close()
-
-    print(f"[INFO] Saved: {output_path}")
-
-
-# ============================================================
 # ATTACK DETECTABILITY PLOT
 # ============================================================
 
-def attack_detectability_plot(df):
+def attack_detectability_table(df):
 
-    pivot = df.pivot(
-        index="attack_type",
-        columns="method",
-        values="detectability_recall"
+    table = (
+        df.pivot(
+            index="attack_type",
+            columns="method",
+            values="detectability_recall"
+        )
+        .reset_index()
     )
 
-    pivot.plot(
-        kind="bar",
-        figsize=(12, 6)
+    # Optional: prettier column names
+    table = table.rename(columns={
+        "Rolling Z-Score": "Rolling Z-score",
+        "Reconstruction Error": "Reconstruction Error",
+        "Isolation Forest": "Isolation Forest"
+    })
+
+    print("\n==============================")
+    print("ATTACK DETECTABILITY TABLE")
+    print("==============================")
+    print(table)
+
+    output_path = (
+        OUTPUT_DIR /
+        "attack_detectability_table.csv"
     )
 
-    plt.ylabel("Recall")
+    table.to_csv(
+        output_path,
+        index=False
+    )
 
-    plt.title(
-        "Attack Detectability by Detection Method"
+    print(f"\n[INFO] Saved: {output_path}")
+
+    return table
+
+# ============================================================
+# ATTACK DETECTABILITY MATRIX
+# ============================================================
+
+def attack_detectability_matrix(detectability_df):
+
+    pivot = (
+        detectability_df
+        .pivot_table(
+            index="attack_type",
+            columns="method",
+            values="detectability_recall",
+            aggfunc="mean"
+        )
+        .fillna(0)
+    )
+
+    print("\n==============================")
+    print("ATTACK DETECTABILITY MATRIX")
+    print("==============================")
+    print(pivot)
+
+    fig, ax = plt.subplots(
+        figsize=(10, 6)
+    )
+
+    heatmap = ax.imshow(
+        pivot.values,
+        aspect="auto",
+        cmap="YlOrRd",
+        vmin=0,
+        vmax=1
+    )
+
+    ax.set_xticks(
+        np.arange(len(pivot.columns))
+    )
+
+    ax.set_xticklabels(
+        pivot.columns,
+        rotation=20,
+        ha="right"
+    )
+
+    ax.set_yticks(
+        np.arange(len(pivot.index))
+    )
+
+    ax.set_yticklabels([
+        attack.replace("_", " ").title()
+        for attack in pivot.index
+    ])
+
+    for i in range(pivot.shape[0]):
+        for j in range(pivot.shape[1]):
+
+            value = pivot.iloc[i, j]
+
+            ax.text(
+                j,
+                i,
+                f"{value:.2f}",
+                ha="center",
+                va="center",
+                color="black",
+                fontsize=9,
+                fontweight="bold"
+            )
+
+    cbar = plt.colorbar(
+        heatmap,
+        ax=ax
+    )
+
+    cbar.set_label(
+        "Detection Recall",
+        fontsize=11
+    )
+
+    ax.set_title(
+        "Attack Detectability Matrix",
+        fontsize=14,
+        fontweight="bold"
+    )
+
+    ax.set_xlabel(
+        "Detection Method",
+        fontsize=12
+    )
+
+    ax.set_ylabel(
+        "Attack Type",
+        fontsize=12
     )
 
     plt.tight_layout()
 
-    output_path = (
+    output_png = (
         PLOTS_DIR /
-        "attack_detectability.png"
+        "attack_detectability_matrix.png"
     )
 
-    plt.savefig(output_path)
+    output_pdf = (
+        PLOTS_DIR /
+        "attack_detectability_matrix.pdf"
+    )
+
+    plt.savefig(
+        output_png,
+        dpi=600,
+        bbox_inches="tight"
+    )
+
+    plt.savefig(
+        output_pdf,
+        bbox_inches="tight"
+    )
 
     plt.close()
 
-    print(f"[INFO] Saved: {output_path}")
-
-
+    print(f"[INFO] Saved: {output_png}")
 # ============================================================
 # PUBLICATION SUMMARY
 # ============================================================
@@ -575,10 +674,21 @@ def main():
 
     performance_comparison_plot(results_df)
 
-    false_positive_plot(results_df)
+    # attack_detectability_plot(
+    #     detectability_df
+    # )
 
-    attack_detectability_plot(detectability_df)
+    print(detectability_df.head())
+    print(detectability_df.columns)
+    print(detectability_df.shape)
 
+    attack_detectability_matrix(
+        detectability_df
+    )
+
+    attack_detectability_table(
+        detectability_df
+    )
     # ========================================================
     # PUBLICATION SUMMARY
     # ========================================================

@@ -33,6 +33,17 @@ import matplotlib.pyplot as plt
 PLOTS_DIR = Path("plots/baseline")
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
+plt.rcParams.update({
+    "figure.figsize": (12, 6),
+    "font.size": 12,
+    "axes.titlesize": 18,
+    "axes.labelsize": 14,
+    "legend.fontsize": 12,
+    "savefig.dpi": 600,
+    "axes.grid": True,
+    "grid.alpha": 0.3
+})
+
 # ============================================================
 # LOAD DATA
 # ============================================================
@@ -53,6 +64,32 @@ def load_dataset(csv_path):
 
     return df
 
+def build_monthly_baseline(df):
+
+    monthly = (
+        df.set_index("timestamp_utc")
+        .resample("ME")["value"]
+        .agg(["mean", "std"])
+        .reset_index()
+    )
+
+    monthly.columns = [
+        "timestamp_utc",
+        "monthly_mean",
+        "monthly_std"
+    ]
+
+    monthly["monthly_mean_plot"] = (
+        monthly["monthly_mean"]
+        .interpolate(limit_direction="both")
+    )
+
+    monthly["monthly_std_plot"] = (
+        monthly["monthly_std"]
+        .interpolate(limit_direction="both")
+    )
+
+    return monthly
 
 # ============================================================
 # TEMPORAL GAP ANALYSIS
@@ -110,73 +147,92 @@ def plot_hourly_consistency(df):
 
     df["hour"] = df["timestamp_utc"].dt.hour
 
-    hourly_avg = (
+    stats = (
         df.groupby("hour")["value"]
-        .mean()
+        .agg(["mean","std"])
     )
 
-    plt.figure(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10,6))
 
-    plt.plot(
-        hourly_avg.index,
-        hourly_avg.values
+    ax.plot(
+        stats.index,
+        stats["mean"],
+        linewidth=3,
+        marker="o",
+        label="Mean PM$_{2.5}$"
     )
 
-    plt.title("Hourly PM2.5 Behavioral Baseline")
-    plt.xlabel("Hour of Day")
-    plt.ylabel("Average PM2.5")
+    ax.fill_between(
+        stats.index,
+        stats["mean"] - stats["std"],
+        stats["mean"] + stats["std"],
+        alpha=0.2,
+        label="±1 Std Dev"
+    )
+
+    ax.set_title(
+        "Hourly PM$_{2.5}$ Behavioral Baseline"
+    )
+
+    ax.set_xlabel("Hour")
+    ax.set_ylabel("Average PM$_{2.5}$")
+
+    ax.legend(loc="best")
 
     plt.tight_layout()
 
-    output_path = (
+    plt.savefig(
         PLOTS_DIR /
-        "hourly_behavioral_baseline.png"
+        "hourly_behavioral_baseline.png",
+        dpi=600
     )
 
-    plt.savefig(output_path)
-
     plt.close()
-
-    print(f"[INFO] Saved: {output_path}")
-
 
 # ============================================================
 # DAILY VARIANCE
 # ============================================================
 
-def plot_daily_variance(df):
+def plot_monthly_variance(monthly):
 
-    df["date"] = df["timestamp_utc"].dt.date
-
-    daily_std = (
-        df.groupby("date")["value"]
-        .std()
+    plot_df = (
+        monthly
+        .dropna(subset=["monthly_mean"])
+        .copy()
     )
 
-    plt.figure(figsize=(14, 6))
+    fig, ax = plt.subplots(figsize=(14,6))
 
-    plt.plot(
-        daily_std.index,
-        daily_std.values
+    ax.plot(
+        plot_df["timestamp_utc"],
+        plot_df["monthly_mean_plot"],
+        linewidth=3,
+        label="Monthly Mean"
     )
 
-    plt.title("Daily PM2.5 Variance")
-    plt.xlabel("Date")
-    plt.ylabel("Standard Deviation")
+    ax.fill_between(
+        plot_df["timestamp_utc"],
+        plot_df["monthly_mean_plot"]
+        - plot_df["monthly_std_plot"],
+        plot_df["monthly_mean_plot"]
+        + plot_df["monthly_std_plot"],
+        alpha=0.25,
+        label="±1 Std Dev"
+    )
+
+    ax.set_title("Monthly PM$_{2.5}$ Variability")
+    ax.set_ylabel("PM$_{2.5}$ (µg/m³)")
+    ax.legend(loc="best")
 
     plt.tight_layout()
 
-    output_path = (
+    plt.savefig(
         PLOTS_DIR /
-        "daily_variance.png"
+        "monthly_variability.png",
+        dpi=600
     )
 
-    plt.savefig(output_path)
-
     plt.close()
-
-    print(f"[INFO] Saved: {output_path}")
-
 
 # ============================================================
 # Z-SCORE ANOMALIES
@@ -184,92 +240,290 @@ def plot_daily_variance(df):
 
 def plot_zscore_anomalies(df):
 
-    anomalies = df[df["z_score"].abs() > 3]
+    anomaly_df = df.copy()
 
-    plt.figure(figsize=(14, 6))
-
-    plt.plot(
-        df["timestamp_utc"],
-        df["value"],
-        label="PM2.5"
+    anomaly_df["anomaly"] = (
+        anomaly_df["z_score"].abs() > 3
     )
 
-    plt.scatter(
-        anomalies["timestamp_utc"],
-        anomalies["value"]
+    monthly_counts = (
+        anomaly_df
+        .set_index("timestamp_utc")
+        .resample("ME")["anomaly"]
+        .sum()
+        .reset_index()
     )
 
-    plt.title("Potential PM2.5 Anomalies")
-    plt.xlabel("Timestamp")
-    plt.ylabel("PM2.5")
-
-    plt.legend()
-
-    plt.tight_layout()
-
-    output_path = (
-        PLOTS_DIR /
-        "zscore_anomalies.png"
+    fig, ax = plt.subplots(
+        figsize=(14, 6)
     )
 
-    plt.savefig(output_path)
+    ax.bar(
+        monthly_counts["timestamp_utc"],
+        monthly_counts["anomaly"],
+        width=25,
+        alpha=0.8
+    )
 
-    plt.close()
-
-    print(f"[INFO] Saved: {output_path}")
-
-
-# ============================================================
-# ROLLING BASELINE
-# ============================================================
-
-def plot_rolling_baseline(df):
-
-    rolling_mean = (
-        df["value"]
-        .rolling(window=24)
+    rolling_trend = (
+        monthly_counts["anomaly"]
+        .rolling(
+            window=6,
+            min_periods=1
+        )
         .mean()
     )
 
-    rolling_std = (
-        df["value"]
-        .rolling(window=24)
-        .std()
+    ax.plot(
+        monthly_counts["timestamp_utc"],
+        rolling_trend,
+        linewidth=3,
+        linestyle="--",
+        color="crimson",
+        label="6-Month Trend"
     )
 
-    plt.figure(figsize=(14, 6))
-
-    plt.plot(
-        df["timestamp_utc"],
-        rolling_mean,
-        label="24H Rolling Mean"
+    ax.set_title(
+        "Monthly PM$_{2.5}$ Anomaly Frequency"
     )
 
-    plt.plot(
-        df["timestamp_utc"],
-        rolling_std,
-        label="24H Rolling Std"
+    ax.set_xlabel("Year")
+
+    ax.set_ylabel(
+        "Number of Anomalies"
     )
 
-    plt.title("Rolling Behavioral Baseline")
-    plt.xlabel("Timestamp")
-    plt.ylabel("PM2.5")
-
-    plt.legend()
+    ax.legend(loc="best")
 
     plt.tight_layout()
 
     output_path = (
         PLOTS_DIR /
-        "rolling_behavioral_baseline.png"
+        "monthly_anomaly_count.png"
     )
 
-    plt.savefig(output_path)
+    plt.savefig(
+        output_path,
+        dpi=600,
+        bbox_inches="tight"
+    )
 
     plt.close()
 
     print(f"[INFO] Saved: {output_path}")
 
+
+def plot_combined_baseline(df, monthly):
+
+    fig, axes = plt.subplots(
+        2,
+        2,
+        figsize=(18, 12)
+    )
+
+    # =====================================================
+    # (a) Monthly Trend
+    # =====================================================
+
+    plot_df = (
+        monthly
+        .dropna(subset=["monthly_mean"])
+        .copy()
+    )
+
+    axes[0, 0].plot(
+        plot_df["timestamp_utc"],
+        plot_df["monthly_mean_plot"],
+        linewidth=3,
+        label="Monthly Mean"
+    )
+
+    # # 6-month moving average
+    # trend = (
+    #     plot_df["monthly_mean_plot"]
+    #     .rolling(6, min_periods=1)
+    #     .mean()
+    # )
+
+    import numpy as np
+
+    x = np.arange(len(plot_df))
+
+    coef = np.polyfit(
+        x,
+        plot_df["monthly_mean_plot"],
+        1
+    )
+
+    trend = np.poly1d(coef)(x)
+
+    axes[0, 0].plot(
+        plot_df["timestamp_utc"],
+        trend,
+        color="orange",
+        linestyle="--",
+        linewidth=3,
+        label="Linear Trend"
+    )
+
+    axes[0, 0].legend()
+
+    axes[0, 0].set_title("(a) Monthly PM$_{2.5}$ Trend")
+    axes[0, 0].set_ylabel("PM$_{2.5}$ (µg/m³)")
+
+    # =====================================================
+    # (b) Monthly Variability
+    # =====================================================
+
+    axes[0, 1].plot(
+        plot_df["timestamp_utc"],
+        plot_df["monthly_mean_plot"],
+        linewidth=3
+    )
+
+    axes[0, 1].fill_between(
+        plot_df["timestamp_utc"],
+        plot_df["monthly_mean_plot"] -
+        plot_df["monthly_std_plot"],
+        plot_df["monthly_mean_plot"] +
+        plot_df["monthly_std_plot"],
+        alpha=0.25
+    )
+
+    axes[0, 1].legend(
+        ["Monthly Mean", "±1 Std Dev"]
+    )
+
+    axes[0, 1].set_title("(b) Monthly Variability")
+    axes[0, 1].set_ylabel("PM$_{2.5}$ (µg/m³)")
+
+    # =====================================================
+    # (c) Hourly Baseline
+    # =====================================================
+
+    hourly_stats = (
+        df.groupby(
+            df["timestamp_utc"].dt.hour
+        )["value"]
+        .agg(["mean", "std"])
+    )
+
+    axes[1, 0].plot(
+        hourly_stats.index,
+        hourly_stats["mean"],
+        linewidth=3,
+        marker="o",
+        label="Mean PM$_{2.5}$"
+    )
+
+    axes[1, 0].fill_between(
+        hourly_stats.index,
+        hourly_stats["mean"] -
+        hourly_stats["std"],
+        hourly_stats["mean"] +
+        hourly_stats["std"],
+        alpha=0.2,
+        label="±1 Std Dev"
+    )
+
+    axes[1, 0].legend()
+
+    axes[1, 0].set_title("(c) Hourly Behavioral Baseline")
+    axes[1, 0].set_xlabel("Hour")
+    axes[1, 0].set_ylabel("PM$_{2.5}$ (µg/m³)")
+
+    # =====================================================
+    # (d) Monthly Anomaly Count
+    # =====================================================
+
+    anomaly_df = df.copy()
+
+    anomaly_df["anomaly"] = (
+            anomaly_df["z_score"].abs() > 3
+    )
+
+    monthly_counts = (
+        anomaly_df
+        .set_index("timestamp_utc")
+        .resample("ME")["anomaly"]
+        .sum()
+        .reset_index()
+    )
+
+    axes[1, 1].bar(
+        monthly_counts["timestamp_utc"],
+        monthly_counts["anomaly"],
+        width=25,
+        alpha=0.8
+    )
+
+    trend = (
+        monthly_counts["anomaly"]
+        .rolling(
+            6,
+            min_periods=1
+        )
+        .mean()
+    )
+
+    axes[1, 1].plot(
+        monthly_counts["timestamp_utc"],
+        trend,
+        linewidth=3,
+        linestyle="--",
+        color="crimson",
+        label="6-Month Trend"
+    )
+
+    axes[1, 1].legend(
+        ["6-Month Trend", "Monthly Count"]
+    )
+
+    axes[1, 1].set_title(
+        "(d) Monthly Anomaly Count"
+    )
+
+    axes[1, 1].set_ylabel(
+        "Count"
+    )
+
+    # =====================================================
+    # Figure Title
+    # =====================================================
+
+    country = (
+        df["country"]
+        .dropna()
+        .iloc[0]
+    )
+
+    fig.suptitle(
+        f"{country} PM$_{{2.5}}$ Behavioral Baseline Analysis",
+        fontsize=22,
+        fontweight="bold"
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        PLOTS_DIR /
+        "baseline_combined_figure.png",
+        dpi=600,
+        bbox_inches="tight"
+    )
+
+    plt.savefig(
+        PLOTS_DIR /
+        "baseline_combined_figure.pdf",
+        bbox_inches="tight"
+    )
+
+    plt.close()
+
+    print(
+        f"[INFO] Saved: "
+        f"{PLOTS_DIR / 'baseline_combined_figure.png'}"
+    )
 
 # ============================================================
 # MAIN
@@ -291,19 +545,26 @@ def main():
 
     df = load_dataset(args.csv)
 
+    monthly = build_monthly_baseline(df)
+
     temporal_gap_analysis(df)
 
-    anomalies = outlier_analysis(df)
+    outlier_analysis(df)
 
     print("\n[INFO] Generating baseline plots...")
 
     plot_hourly_consistency(df)
 
-    plot_daily_variance(df)
+    plot_monthly_variance(monthly)
 
     plot_zscore_anomalies(df)
 
-    plot_rolling_baseline(df)
+    # plot_rolling_baseline(monthly)
+
+    plot_combined_baseline(
+        df,
+        monthly
+    )
 
     print("\n[INFO] Baseline analysis completed.")
 
