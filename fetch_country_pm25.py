@@ -2,38 +2,41 @@
 """
 fetch_country_pm25.py
 
-OpenAQ v3 Country-Level PM2.5 Collector
-for the Environmental Cybersecurity Project.
+Research-grade OpenAQ v3 PM2.5 collector
+with:
 
-PURPOSE
--------
-Fetch PM2.5 measurements for ALL PM2.5 sensors
-within a selected country using OpenAQ v3.
+- country-level ingestion
+- streaming page processing
+- immediate checkpointing
+- graceful CTRL+C handling
+- rate-limit awareness
+- fault tolerance
+- raw JSON preservation
+- resumable-safe architecture
 
-CORRECT OPENAQ v3 FLOW
-----------------------
+ARCHITECTURE
+------------
 Country
     ↓
-Locations
+Stream location pages
     ↓
-Location Metadata
+Process locations immediately
     ↓
-PM2.5 Sensors
+Discover PM2.5 sensors
     ↓
-Sensor Measurements
-
-TEST COUNTRY
-------------
-Ethiopia (ET)
+Fetch measurements
+    ↓
+Immediate checkpoint save
 
 RECOMMENDED USAGE
 -----------------
+
 export OPENAQ_API_KEY="your_api_key"
 
 python fetch_country_pm25.py \
     --country ET \
     --start-date 2025-01-01 \
-    --end-date 2025-01-31
+    --end-date 2025-01-07
 """
 
 import os
@@ -101,7 +104,7 @@ console.setFormatter(formatter)
 logging.getLogger("").addHandler(console)
 
 # ============================================================
-# SESSION
+# API SESSION
 # ============================================================
 
 HEADERS = {
@@ -112,7 +115,15 @@ session = requests.Session()
 session.headers.update(HEADERS)
 
 # ============================================================
-# REQUEST HELPER
+# RATE LIMIT TRACKER
+# ============================================================
+
+RATE_LIMIT = None
+RATE_REMAINING = None
+RATE_RESET = None
+
+# ============================================================
+# REQUEST HANDLER
 # ============================================================
 
 def request_with_retries(
@@ -121,6 +132,17 @@ def request_with_retries(
         retries=3,
         backoff=2
 ):
+    """
+    Robust request handler with:
+        - retry logic
+        - rate-limit awareness
+        - graceful pausing
+        - fault tolerance
+    """
+
+    global RATE_LIMIT
+    global RATE_REMAINING
+    global RATE_RESET
 
     for attempt in range(1, retries + 1):
 
@@ -132,12 +154,121 @@ def request_with_retries(
                 timeout=30
             )
 
+            # ====================================================
+            # RATE LIMIT HEADERS
+            # ====================================================
+
+            RATE_LIMIT = int(
+                response.headers.get(
+                    "x-ratelimit-limit",
+                    0
+                )
+            )
+
+            RATE_REMAINING = int(
+                response.headers.get(
+                    "x-ratelimit-remaining",
+                    0
+                )
+            )
+
+            RATE_RESET = int(
+                response.headers.get(
+                    "x-ratelimit-reset",
+                    60
+                )
+            )
+
+            logging.info(
+                f"Rate Limit: "
+                f"{RATE_REMAINING}/{RATE_LIMIT} remaining"
+            )
+
+            # ====================================================
+            # SUCCESS
+            # ====================================================
+
             if response.status_code == 200:
                 return response.json()
 
+            # ====================================================
+            # RATE LIMIT EXCEEDED
+            # ====================================================
+
+            if response.status_code == 429:
+
+                logging.warning(
+                    "API rate limit exceeded."
+                )
+
+                print("\n")
+                print("=" * 60)
+                print("OPENAQ API RATE LIMIT EXCEEDED")
+                print("=" * 60)
+
+                print(
+                    f"Requests Remaining : "
+                    f"{RATE_REMAINING}"
+                )
+
+                print(
+                    f"Reset Timer (sec)  : "
+                    f"{RATE_RESET}"
+                )
+
+                print("=" * 60)
+
+                print("\nOptions:")
+                print("1 - Wait and continue")
+                print("2 - Exit safely")
+
+                user_choice = input(
+                    "\nEnter choice: "
+                ).strip()
+
+                # ================================================
+                # WAIT + CONTINUE
+                # ================================================
+
+                if user_choice == "1":
+
+                    wait_time = RATE_RESET + 1
+
+                    print(
+                        f"\nWaiting "
+                        f"{wait_time} seconds "
+                        f"for rate limit reset...\n"
+                    )
+
+                    logging.warning(
+                        f"Sleeping for "
+                        f"{wait_time} seconds..."
+                    )
+
+                    time.sleep(wait_time)
+
+                    continue
+
+                # ================================================
+                # SAFE EXIT
+                # ================================================
+
+                else:
+
+                    logging.warning(
+                        "User terminated collection "
+                        "after rate limit hit."
+                    )
+
+                    return None
+
+            # ====================================================
+            # OTHER HTTP ERRORS
+            # ====================================================
+
             logging.warning(
-                f"HTTP {response.status_code} | "
-                f"URL: {url}"
+                f"HTTP {response.status_code} "
+                f"| URL: {url}"
             )
 
         except requests.RequestException as e:
@@ -145,6 +276,10 @@ def request_with_retries(
             logging.warning(
                 f"Request failed: {e}"
             )
+
+        # ========================================================
+        # RETRY BACKOFF
+        # ========================================================
 
         sleep_time = backoff ** attempt
 
@@ -156,29 +291,79 @@ def request_with_retries(
 
     return None
 
-# ============================================================
-# FETCH COUNTRY LOCATIONS
-# ============================================================
 
-def fetch_country_locations(country_code):
+def get_country_id(country_code):
     """
-    Fetch all locations for a country.
+    Resolve ISO country code (e.g. ET)
+    to OpenAQ country ID.
     """
 
-    logging.info(
-        f"Fetching locations for country: {country_code}"
-    )
-
-    all_locations = []
+    url = f"{BASE_URL}/countries"
 
     page = 1
 
     while True:
 
+        data = request_with_retries(
+            url,
+            params={
+                "limit": 100,
+                "page": page
+            }
+        )
+
+        if not data:
+            break
+
+        results = data.get("results", [])
+
+        if not results:
+            break
+
+        for country in results:
+
+            if (
+                country.get("code", "").upper()
+                == country_code.upper()
+            ):
+
+                logging.info(
+                    f"Resolved {country_code} "
+                    f"to country_id="
+                    f"{country['id']}"
+                )
+
+                return country["id"]
+
+        page += 1
+
+    raise ValueError(
+        f"Country code not found: "
+        f"{country_code}"
+    )
+
+# ============================================================
+# STREAM COUNTRY LOCATIONS
+# ============================================================
+
+def stream_country_locations(country_id):
+    """
+    Stream locations page-by-page
+    instead of loading all into memory.
+    """
+
+    page = 1
+
+    while True:
+
+        logging.info(
+            f"Fetching location page {page}"
+        )
+
         url = f"{BASE_URL}/locations"
 
         params = {
-            "countries": country_code,
+            "countries_id": country_id,
             "limit": 100,
             "page": page
         }
@@ -188,61 +373,124 @@ def fetch_country_locations(country_code):
             params=params
         )
 
+        print("\nREQUEST PARAMS:")
+        print(params)
+
+        print("\nMETA:")
+        print(data.get("meta", {}))
+
         if data is None:
+
+            logging.warning(
+                "Location request returned None."
+            )
+
             break
 
         results = data.get("results", [])
 
+
+        # ====================================================
+        # COUNTRY FILTER VALIDATION
+        # ====================================================
+
+        if page == 1 and results:
+
+            print("\nCOUNTRY FILTER VALIDATION")
+            print("=" * 50)
+
+            for r in results[:5]:
+                country = (
+                    r.get("country", {})
+                    .get("name")
+                )
+
+                print(
+                    f"Location ID: {r.get('id')}"
+                )
+
+                print(
+                    f"Location   : {r.get('name')}"
+                )
+
+                print(
+                    f"Country    : {country}"
+                )
+
+                print("-" * 50)
+
+                logging.info(
+                    f"First returned country: "
+                    f"{country}"
+                )
+
+            # break
+        # location_id = location.get("id")
+        #
+        # print(
+        #     f"\nPROCESSING LOCATION: "
+        #     f"{location_id} | "
+        #     f"{location.get('name')}"
+        # )
+
+        # ====================================================
+
         if not results:
+
+            logging.info(
+                "No more location pages."
+            )
+
             break
 
-        all_locations.extend(results)
+        logging.info(
+            f"Fetched page {page} "
+            f"({len(results)} locations)"
+        )
 
         logging.info(
-            f"Fetched location page {page} "
-            f"({len(results)} rows)"
+            f"Rate Status -> "
+            f"{RATE_REMAINING}/{RATE_LIMIT} remaining"
         )
+
+        # ====================================================
+        # STREAM IMMEDIATELY
+        # ====================================================
+
+        for location in results:
+            yield location
 
         page += 1
 
         time.sleep(1)
-
-    logging.info(
-        f"Total locations discovered: "
-        f"{len(all_locations)}"
-    )
-
-    return all_locations
 
 # ============================================================
 # LOCATION METADATA
 # ============================================================
 
 def fetch_location_metadata(location_id):
-    """
-    Fetch detailed location metadata.
-    """
 
     url = f"{BASE_URL}/locations/{location_id}"
 
     logging.info(
-        f"Fetching location metadata: {location_id}"
+        f"Fetching location metadata: "
+        f"{location_id}"
     )
 
-    data = request_with_retries(url)
-
-    return data
+    return request_with_retries(url)
 
 # ============================================================
 # SENSOR DISCOVERY
 # ============================================================
 
 def extract_pm25_sensors(location_data):
-    """
-    Extract PM2.5 sensors only.
-    """
 
     sensors = []
+
+    print(
+        f"PM25 Sensors Found: "
+        f"{len(sensors)}"
+    )
 
     results = location_data.get("results", [])
 
@@ -254,6 +502,7 @@ def extract_pm25_sensors(location_data):
     for sensor in location.get("sensors", []):
 
         parameter = sensor.get("parameter", {})
+
         parameter_name = parameter.get(
             "name",
             ""
@@ -296,13 +545,10 @@ def fetch_measurements(
         end_date,
         limit=1000
 ):
-    """
-    Fetch measurements from sensor endpoint.
-    """
 
     logging.info(
-        f"Fetching measurements for sensor "
-        f"{sensor_id}"
+        f"Fetching measurements "
+        f"for sensor {sensor_id}"
     )
 
     all_results = []
@@ -387,9 +633,6 @@ def normalize_measurements(
         metadata,
         sensor_info
 ):
-    """
-    Normalize OpenAQ response into dataframe.
-    """
 
     records = []
 
@@ -473,19 +716,73 @@ def normalize_measurements(
         subset=["timestamp_utc", "value"]
     )
 
-    # Remove impossible PM2.5 values
     df = df[df["value"] >= 0]
 
-    # Remove duplicates
     df = df.drop_duplicates()
 
-    # Sort chronologically
     df = df.sort_values("timestamp_utc")
 
     return df
 
 # ============================================================
-# EXPORT CSV
+# CHECKPOINT SAVE
+# ============================================================
+
+def save_checkpoint(
+        all_dataframes,
+        country_code
+):
+
+    if not all_dataframes:
+
+        logging.warning(
+            "No dataframe data available "
+            "for checkpoint save."
+        )
+
+        return
+
+    try:
+
+        checkpoint_df = pd.concat(
+            all_dataframes,
+            ignore_index=True
+        )
+
+        checkpoint_df = (
+            checkpoint_df
+            .drop_duplicates()
+            .sort_values("timestamp_utc")
+        )
+
+        checkpoint_filename = (
+            f"{country_code.lower()}_"
+            f"pm25_checkpoint.csv"
+        )
+
+        checkpoint_path = (
+            PROCESSED_DIR /
+            checkpoint_filename
+        )
+
+        checkpoint_df.to_csv(
+            checkpoint_path,
+            index=False
+        )
+
+        logging.info(
+            f"Checkpoint saved successfully: "
+            f"{checkpoint_path}"
+        )
+
+    except Exception as e:
+
+        logging.error(
+            f"Checkpoint save failed: {e}"
+        )
+
+# ============================================================
+# FINAL EXPORT
 # ============================================================
 
 def export_csv(df, filename):
@@ -510,25 +807,26 @@ def main():
 
     parser.add_argument(
         "--country",
-        default="ET",
-        help="ISO country code (default: ET)"
+        default=86,
+        help="Country ID"
     )
 
     parser.add_argument(
         "--start-date",
-        default="2025-01-01",
+        default="2016-01-01",
         help="Start date YYYY-MM-DD"
     )
 
     parser.add_argument(
         "--end-date",
-        default="2025-01-07",
+        default="2016-12-31",
         help="End date YYYY-MM-DD"
     )
 
     args = parser.parse_args()
 
     country_code = args.country.upper()
+
     start_date = args.start_date
     end_date = args.end_date
 
@@ -536,140 +834,209 @@ def main():
     logging.info("OpenAQ Country PM2.5 Collector")
     logging.info("===================================")
 
-    logging.info(f"Country     : {country_code}")
-    logging.info(f"Start Date  : {start_date}")
-    logging.info(f"End Date    : {end_date}")
-
-    # ========================================================
-    # STEP 1 — COUNTRY LOCATIONS
-    # ========================================================
-
-    locations = fetch_country_locations(
-        country_code
+    logging.info(
+        f"Country     : {country_code}"
     )
 
-    if not locations:
+    logging.info(
+        f"Start Date  : {start_date}"
+    )
 
-        logging.warning(
-            "No locations discovered."
-        )
-
-        return
-
-    all_dataframes = []
+    logging.info(
+        f"End Date    : {end_date}"
+    )
 
     timestamp = datetime.now().strftime(
         "%Y%m%d_%H%M%S"
     )
 
+    all_dataframes = []
+
+    processed_locations = 0
+    processed_sensors = 0
+    total_rows_collected = 0
+
     # ========================================================
-    # STEP 2 — LOCATION LOOP
+    # STREAMING EXECUTION
     # ========================================================
 
-    for location in locations:
+    try:
 
-        location_id = location.get("id")
+        country_id = get_country_id(
+            country_code
+        )
 
         logging.info(
-            f"Processing location "
-            f"{location_id}"
+            f"Using OpenAQ country ID "
+            f"{country_id}"
         )
 
-        # ----------------------------------------------------
-        # FETCH FULL LOCATION METADATA
-        # ----------------------------------------------------
+        for location in stream_country_locations(
+            country_id
+        ):
 
-        metadata = fetch_location_metadata(
-            location_id
-        )
+            location_id = location.get("id")
 
-        if metadata is None:
-            continue
-
-        # ----------------------------------------------------
-        # EXTRACT PM2.5 SENSORS
-        # ----------------------------------------------------
-
-        sensors = extract_pm25_sensors(
-            metadata
-        )
-
-        if not sensors:
+            processed_locations += 1
 
             logging.info(
-                f"No PM2.5 sensors found "
-                f"for location {location_id}"
+                f"Processing location "
+                f"{location_id}"
             )
 
-            continue
+            # ------------------------------------------------
+            # FETCH LOCATION METADATA
+            # ------------------------------------------------
 
-        logging.info(
-            f"Discovered {len(sensors)} "
-            f"PM2.5 sensor(s)"
-        )
-
-        # ----------------------------------------------------
-        # SENSOR LOOP
-        # ----------------------------------------------------
-
-        for sensor in sensors:
-
-            sensor_id = sensor["sensor_id"]
-
-            measurements = fetch_measurements(
-                sensor_id,
-                start_date,
-                end_date
+            metadata = fetch_location_metadata(
+                location_id
             )
 
-            if not measurements:
+            if metadata is None:
+                continue
 
-                logging.warning(
-                    f"No measurements returned "
-                    f"for sensor {sensor_id}"
+            # ------------------------------------------------
+            # SENSOR DISCOVERY
+            # ------------------------------------------------
+
+            sensors = extract_pm25_sensors(
+                metadata
+            )
+
+            if not sensors:
+
+                logging.info(
+                    f"No PM2.5 sensors found "
+                    f"for location {location_id}"
                 )
 
                 continue
 
-            # ------------------------------------------------
-            # SAVE RAW JSON
-            # ------------------------------------------------
-
-            raw_filename = (
-                f"{country_code}_"
-                f"sensor_{sensor_id}_"
-                f"{timestamp}.json"
-            )
-
-            save_raw_json(
-                measurements,
-                raw_filename
+            logging.info(
+                f"Discovered {len(sensors)} "
+                f"PM2.5 sensor(s)"
             )
 
             # ------------------------------------------------
-            # NORMALIZE
+            # SENSOR LOOP
             # ------------------------------------------------
 
-            df = normalize_measurements(
-                measurements,
-                metadata,
-                sensor
-            )
+            for sensor in sensors:
 
-            if df.empty:
+                sensor_id = sensor["sensor_id"]
 
-                logging.warning(
-                    f"Empty dataframe for "
-                    f"sensor {sensor_id}"
+                processed_sensors += 1
+
+                measurements = fetch_measurements(
+                    sensor_id,
+                    start_date,
+                    end_date
                 )
 
-                continue
+                if not measurements:
 
-            all_dataframes.append(df)
+                    logging.warning(
+                        f"No measurements returned "
+                        f"for sensor {sensor_id}"
+                    )
 
-            logging.info(
-                f"Normalized rows: {len(df)}"
-            )
+                    continue
+
+                # --------------------------------------------
+                # SAVE RAW JSON
+                # --------------------------------------------
+
+                raw_filename = (
+                    f"{country_code}_"
+                    f"sensor_{sensor_id}_"
+                    f"{timestamp}.json"
+                )
+
+                save_raw_json(
+                    measurements,
+                    raw_filename
+                )
+
+                # --------------------------------------------
+                # NORMALIZE
+                # --------------------------------------------
+
+                df = normalize_measurements(
+                    measurements,
+                    metadata,
+                    sensor
+                )
+
+                if df.empty:
+
+                    logging.warning(
+                        f"Empty dataframe for "
+                        f"sensor {sensor_id}"
+                    )
+
+                    continue
+
+                rows_added = len(df)
+
+                total_rows_collected += rows_added
+
+                all_dataframes.append(df)
+
+                # --------------------------------------------
+                # IMMEDIATE CHECKPOINT SAVE
+                # --------------------------------------------
+
+                save_checkpoint(
+                    all_dataframes,
+                    country_code
+                )
+
+                logging.info(
+                    f"Rows added: {rows_added}"
+                )
+
+                logging.info(
+                    f"Total rows collected: "
+                    f"{total_rows_collected}"
+                )
+
+                logging.info(
+                    f"Processed locations: "
+                    f"{processed_locations}"
+                )
+
+                logging.info(
+                    f"Processed sensors: "
+                    f"{processed_sensors}"
+                )
+
+    # ========================================================
+    # CTRL+C SAFE EXIT
+    # ========================================================
+
+    except KeyboardInterrupt:
+
+        logging.warning(
+            "Keyboard interrupt detected."
+        )
+
+        print("\n")
+        print("=" * 60)
+        print("INTERRUPTION DETECTED")
+        print("=" * 60)
+
+        print(
+            "Saving checkpoint before exit..."
+        )
+
+        save_checkpoint(
+            all_dataframes,
+            country_code
+        )
+
+        print("\nSafe exit completed.")
+
+        return
 
     # ========================================================
     # FINAL EXPORT
@@ -688,10 +1055,10 @@ def main():
         ignore_index=True
     )
 
-    final_df = final_df.drop_duplicates()
-
-    final_df = final_df.sort_values(
-        "timestamp_utc"
+    final_df = (
+        final_df
+        .drop_duplicates()
+        .sort_values("timestamp_utc")
     )
 
     csv_filename = (
@@ -708,8 +1075,27 @@ def main():
     logging.info("Collection completed successfully")
     logging.info("===================================")
 
-    print(final_df.head())
-    print(f"\nTotal rows: {len(final_df)}")
+    print("\n")
+    print("=" * 60)
+    print("COLLECTION COMPLETED SUCCESSFULLY")
+    print("=" * 60)
+
+    print(
+        f"Total rows collected: "
+        f"{len(final_df)}"
+    )
+
+    print(
+        f"Processed locations: "
+        f"{processed_locations}"
+    )
+
+    print(
+        f"Processed sensors: "
+        f"{processed_sensors}"
+    )
+
+    print("=" * 60)
 
 # ============================================================
 # ENTRYPOINT
