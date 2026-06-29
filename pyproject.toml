@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "env-cysec"
+version = "0.1.0"
+description = "Environmental cybersecurity PM2.5 analysis pipeline"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "python-dotenv",
+    "requests",
+    "scikit-learn",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[tool.setuptools.packages.find]
+include = [
+    "eda*",
+    "preprocessing*",
+]
+exclude = [
+    "data*",
+    "data_results*",
+    "logs*",
+    "outputs*",
+    "plots*",
+    "tests*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+python_files = ["test_*.py"]
