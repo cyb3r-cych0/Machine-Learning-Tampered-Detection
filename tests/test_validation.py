@@ -22,13 +22,13 @@ def valid_dataset():
 def test_validate_dataset_returns_report_for_valid_data():
     report = validate_dataset(valid_dataset())
 
-    assert report["rows"] == 2
-    assert report["columns"] == 5
+    assert report["input_rows"] == 2
+    assert report["input_columns"] == 5
     assert report["countries"] == 1
     assert report["stations"] == 1
     assert report["sensors"] == 1
     assert report["duplicates"] == 0
-    assert report["sorted"] is True
+    assert report["sorted_before_cleaning"] is True
 
 
 def test_validate_dataset_rejects_missing_required_column():
