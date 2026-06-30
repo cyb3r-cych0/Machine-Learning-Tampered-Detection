@@ -271,7 +271,7 @@ Command-line entry point for running the preprocessing package.
 
 ## Tests
 
-The package is tested from the top-level `tests/` directory:
+The package is tested from `preprocessing/tests/`:
 
 ```text
 tests/test_validation.py
@@ -281,16 +281,16 @@ tests/test_temporal.py
 tests/test_quality.py
 ```
 
-Run all tests from the repository root:
+Run all tests from the project root:
 
 ```powershell
-pytest
+pytest preprocessing/tests
 ```
 
 or:
 
 ```powershell
-python -m pytest
+python -m pytest preprocessing/tests
 ```
 
 ## Package Layout
@@ -311,4 +311,11 @@ preprocessing/
     pipeline.py
     manager.py
     run_preprocessing.py
+    tests/
+        __init__.py
+        test_cleaning.py
+        test_integrity.py
+        test_quality.py
+        test_temporal.py
+        test_validation.py
 ```
